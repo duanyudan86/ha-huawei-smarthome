@@ -3,13 +3,15 @@
 设备类型: 华为 AI 音箱 2 (电池版) (AI Speaker 2 with Battery)
 制造商: 华为, 型号 AIS-BW50-00
 核心服务(播放控制):
-   smartspeaker : playControl enum RW (0=停止播放, 1=启动播放, 2=上一首/下一首)
+   smartspeaker : playControl enum RW (0=停止播放, 1=启动播放, 2=上一首, 3=下一首)
+                  volume 0-100 (真实设备上报，Profile 未完整声明)
    audioplayer  : playState enum RW (0=暂停, 1=播放中, 2=停止)
+                  metadata JSON (标题、歌手、封面、时长等)
    speakerState : State enum R (0=待机中, 1=拾音中, 2=等待响应, 3=语音播报)
 
-本适配器暴露一个 Home Assistant ``media_player`` 实体, 提供 播放/暂停/停止 控制.
-注: playControl=2 在设备资料中上一首与下一首共用同一值, 无法可靠区分,
-    故不暴露 上一首/下一首 动作, 避免误操作.
+本适配器暴露一个 Home Assistant ``media_player`` 实体，提供播放控制、
+上一曲/下一曲、音量和当前媒体信息；另提供一个只读的音箱状态传感器。
+电池服务的 ``voltage`` 字段按设备实际协议表示电量百分比。
 """
 
 from __future__ import annotations
@@ -26,6 +28,15 @@ _STATE_PLAYING = "playing"
 _STATE_PAUSED = "paused"
 _STATE_IDLE = "idle"
 _TTS_TONE_URL = "https://speaker-drcn.things.hicloud.com:9443/resource/silence.ogg"
+_PLAY_CONTROL_PREVIOUS = 2
+_PLAY_CONTROL_NEXT = 3
+_SPEAKER_STATE_FIELD = "speakerState"
+_SPEAKER_STATE_LABELS = {
+    0: "待机中",
+    1: "拾音中",
+    2: "等待响应",
+    3: "语音播报",
+}
 
 
 def _as_int(value: Any) -> int | None:
@@ -45,16 +56,58 @@ def _as_int(value: Any) -> int | None:
         return None
 
 
+def _metadata(device: DeviceContext) -> Mapping[str, Any]:
+    raw = device.value("audioplayer", "metadata")
+    if isinstance(raw, Mapping):
+        return raw
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, Mapping) else {}
+
+
+def _volume_level(value: Any) -> float | None:
+    volume = _as_int(value)
+    if volume is None:
+        return None
+    return max(0.0, min(100.0, volume)) / 100
+
+
 async def _play(context: DeviceContext, _data: Mapping[str, Any]) -> None:
     await context.async_send_service("smartspeaker", {"playControl": 1})
 
 
 async def _pause(context: DeviceContext, _data: Mapping[str, Any]) -> None:
-    await context.async_send_service("audioplayer", {"playState": 0})
+    # Official App sends pause/resume through smartspeaker.playControl.
+    await context.async_send_service("smartspeaker", {"playControl": 0})
 
 
 async def _stop(context: DeviceContext, _data: Mapping[str, Any]) -> None:
     await context.async_send_service("smartspeaker", {"playControl": 0})
+
+
+async def _previous(context: DeviceContext, _data: Mapping[str, Any]) -> None:
+    await context.async_send_service(
+        "smartspeaker", {"playControl": _PLAY_CONTROL_PREVIOUS}
+    )
+
+
+async def _next(context: DeviceContext, _data: Mapping[str, Any]) -> None:
+    await context.async_send_service(
+        "smartspeaker", {"playControl": _PLAY_CONTROL_NEXT}
+    )
+
+
+async def _set_volume(context: DeviceContext, data: Mapping[str, Any]) -> None:
+    volume = data.get("volume")
+    if not isinstance(volume, (int, float)) or isinstance(volume, bool):
+        return
+    await context.async_send_service(
+        "smartspeaker", {"volume": round(max(0.0, min(1.0, volume)) * 100)}
+    )
 
 
 async def _speak(context: DeviceContext, data: Mapping[str, Any]) -> None:
@@ -134,7 +187,48 @@ class ProductX005Adapter:
                 state = _STATE_PAUSED
             else:
                 state = _STATE_IDLE
-            return {"state": state}
+            metadata = _metadata(device)
+            return {
+                "state": state,
+                "volume_level": _volume_level(
+                    device.value("smartspeaker", "volume")
+                ),
+                "media_title": metadata.get("title"),
+                "media_artist": metadata.get("artistName"),
+                "media_album_name": metadata.get("albumName") or metadata.get("album"),
+                "media_image_url": metadata.get("pictureUrl"),
+                "source": metadata.get("contentProvider"),
+            }
+
+        def speaker_state(device: DeviceContext) -> Mapping[str, Any]:
+            # Profile calls this characteristic ``State``; the live MQTT
+            # payload uses the wire field ``speakerState``.
+            value = _as_int(
+                device.value("speakerState", _SPEAKER_STATE_FIELD)
+            )
+            return {"native_value": _SPEAKER_STATE_LABELS.get(value)}
+
+        def battery_state(device: DeviceContext) -> Mapping[str, Any]:
+            value = _as_int(device.value("battery", "voltage"))
+            return {
+                "native_value": (
+                    None if value is None or value < 0 else max(0, min(100, value))
+                )
+            }
+
+        actions = {
+            "play": _play,
+            "pause": _pause,
+            "stop": _stop,
+        }
+        if context.has_service("smartspeaker"):
+            actions.update(
+                {
+                    "previous": _previous,
+                    "next": _next,
+                    "volume": _set_volume,
+                }
+            )
 
         if context.has_service("audioplayer"):
             entities.append(
@@ -143,10 +237,29 @@ class ProductX005Adapter:
                     key="speaker",
                     name=None,
                     state=player_state,
-                    actions={
-                        "play": _play,
-                        "pause": _pause,
-                        "stop": _stop,
+                    actions=actions,
+                )
+            )
+        if context.has_service("speakerState"):
+            entities.append(
+                EntitySpec(
+                    platform="sensor",
+                    key="speaker_state",
+                    name="音箱状态",
+                    state=speaker_state,
+                )
+            )
+        if context.has_service("battery"):
+            entities.append(
+                EntitySpec(
+                    platform="sensor",
+                    key="battery",
+                    name="电池电量",
+                    state=battery_state,
+                    metadata={
+                        "device_class": "battery",
+                        "unit": "%",
+                        "state_class": "measurement",
                     },
                 )
             )

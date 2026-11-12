@@ -12,11 +12,9 @@
    NightMode.on                 bool RW  小夜灯 (1=开, 0=关)
 
 本适配器暴露:
-   1. switch   开关
-   2. number   亮度
-   3. number   色温
-   4. select   灯光模式
-   5. switch   小夜灯
+   1. light    开关、亮度、色温
+   2. select   灯光模式
+   3. switch   小夜灯
 
 投影说明:
    Profile 要求 colourMode 与 lightMode 同时上报。色温与灯光模式仅在
@@ -89,28 +87,38 @@ def _colour_mode_int(context: DeviceContext) -> int | None:
 
 # ---- 动作函数 ------------------------------------------------------------
 
-async def _turn_on(context: DeviceContext, _data: Mapping[str, Any]) -> None:
+def _device_brightness_to_ha(value: Any) -> int | None:
+    value = _as_int(value)
+    if value is None:
+        return None
+    return round(1 + (max(1, min(100, value)) - 1) * 254 / 99)
+
+
+def _ha_brightness_to_device(value: Any) -> int | None:
+    value = _as_int(value)
+    if value is None:
+        return None
+    return round(1 + (max(1, min(255, value)) - 1) * 99 / 254)
+
+
+async def _turn_on(context: DeviceContext, data: Mapping[str, Any]) -> None:
     await context.async_send_service("switch", {"on": 1})
+
+    brightness = _ha_brightness_to_device(data.get("brightness"))
+    if brightness is not None:
+        await context.async_send_service(
+            "brightness", {"brightness": brightness}
+        )
+
+    color_temperature = _as_int(data.get("color_temp_kelvin"))
+    if color_temperature is not None:
+        await context.async_send_service(
+            "cct", {"colorTemperature": max(2000, min(6000, color_temperature))}
+        )
 
 
 async def _turn_off(context: DeviceContext, _data: Mapping[str, Any]) -> None:
     await context.async_send_service("switch", {"on": 0})
-
-
-async def _set_brightness(context: DeviceContext, data: Mapping[str, Any]) -> None:
-    value = _as_int(data.get("value"))
-    if value is None:
-        return
-    value = max(1, min(100, value))
-    await context.async_send_service("brightness", {"brightness": value})
-
-
-async def _set_color_temp(context: DeviceContext, data: Mapping[str, Any]) -> None:
-    value = _as_int(data.get("value"))
-    if value is None:
-        return
-    value = max(2000, min(6000, value))
-    await context.async_send_service("cct", {"colorTemperature": value})
 
 
 async def _select_light_mode(context: DeviceContext, data: Mapping[str, Any]) -> None:
@@ -135,19 +143,29 @@ class Product20HZAdapter:
     prod_id = "20HZ"
 
     def entities(self, context: DeviceContext) -> tuple[EntitySpec, ...]:
-        if context.profile is None or not context.has_service("switch"):
+        if context.profile is None or not all(
+            context.has_service(sid) for sid in ("switch", "brightness", "cct")
+        ):
             return ()
 
-        def power_state(device: DeviceContext) -> Mapping[str, Any]:
-            return {"is_on": _as_bool(device.value("switch", "on"))}
-
-        def brightness_state(device: DeviceContext) -> Mapping[str, Any]:
-            return {"native_value": _as_int(device.value("brightness", "brightness"))}
-
-        def color_temp_state(device: DeviceContext) -> Mapping[str, Any]:
-            if _colour_mode_int(device) != _COLOUR_MODE_SINGLE:
-                return {"native_value": None}
-            return {"native_value": _as_int(device.value("cct", "colorTemperature"))}
+        def light_state(device: DeviceContext) -> Mapping[str, Any]:
+            colour_mode = _colour_mode_int(device)
+            return {
+                "is_on": _as_bool(device.value("switch", "on")),
+                "brightness": _device_brightness_to_ha(
+                    device.value("brightness", "brightness")
+                ),
+                "color_temp_kelvin": (
+                    _as_int(device.value("cct", "colorTemperature"))
+                    if colour_mode == _COLOUR_MODE_SINGLE
+                    else None
+                ),
+                "color_mode": (
+                    "color_temp"
+                    if colour_mode == _COLOUR_MODE_SINGLE
+                    else "brightness"
+                ),
+            }
 
         def light_mode_state(device: DeviceContext) -> Mapping[str, Any]:
             if _colour_mode_int(device) != _COLOUR_MODE_DEVICE_PRESET:
@@ -161,17 +179,18 @@ class Product20HZAdapter:
             return {"is_on": _as_bool(device.value("NightMode", "on"))}
 
         return (
-            EntitySpec(platform="switch", key="power", name="开关",
-                       state=power_state,
-                       actions={"turn_on": _turn_on, "turn_off": _turn_off}),
-            EntitySpec(platform="number", key="brightness", name="亮度",
-                       state=brightness_state,
-                       metadata={"min": 1, "max": 100, "step": 1, "unit": "%"},
-                       actions={"set_value": _set_brightness}),
-            EntitySpec(platform="number", key="color_temp", name="色温",
-                       state=color_temp_state,
-                       metadata={"min": 2000, "max": 6000, "step": 1, "unit": "K"},
-                       actions={"set_value": _set_color_temp}),
+            EntitySpec(
+                platform="light",
+                key="light",
+                name=None,
+                state=light_state,
+                metadata={
+                    "supported_color_modes": {"brightness", "color_temp"},
+                    "min_color_temp_kelvin": 2000,
+                    "max_color_temp_kelvin": 6000,
+                },
+                actions={"turn_on": _turn_on, "turn_off": _turn_off},
+            ),
             EntitySpec(platform="select", key="light_mode", name="灯光模式",
                        state=light_mode_state,
                        metadata={"options": _LIGHT_MODE_OPTIONS},
