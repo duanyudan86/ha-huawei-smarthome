@@ -44,7 +44,7 @@ HACS -> 右上角菜单 -> 自定义仓库
 添加仓库地址：
 
 ```text
-https://github.com/xiasi0/ha-huawei-smarthome
+https://github.com/duanyudan86/ha-huawei-smarthome
 ```
 
 仓库类型选择“集成（Integration）”。添加后，搜索并下载 `Huawei SmartHome`，然后重启 Home Assistant。
