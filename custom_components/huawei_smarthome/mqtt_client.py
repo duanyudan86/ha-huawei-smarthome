@@ -6,6 +6,9 @@ import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timezone
 import json
+
+import paho.mqtt.client as mqtt
+
 import logging
 from typing import Any, Protocol
 
@@ -293,8 +296,6 @@ class PahoMqttTransport:
     async def connect(self, settings: MqttConnectionSettings) -> None:
         """Connect and wait for CONNACK."""
 
-        import paho.mqtt.client as mqtt
-
         await self.disconnect()
         self._loop = asyncio.get_running_loop()
         self._connected = asyncio.Event()
@@ -377,8 +378,6 @@ class PahoMqttTransport:
 
     async def publish(self, topic: str, payload: bytes, qos: int) -> None:
         """Publish and wait for the MQTT transport acknowledgement."""
-
-        import paho.mqtt.client as mqtt
 
         client = self._client
         if client is None:
