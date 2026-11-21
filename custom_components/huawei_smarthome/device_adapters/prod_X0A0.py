@@ -40,6 +40,12 @@ Profile（profiles/X0A0.json）:
 - colour 疑似 0xRRGGBB 整数: 0-10 全部渲染为暗蓝(仅蓝通道微亮), 
   brightness=100 被钳位回报为 1, 刻度不明;
 - 无法达到 App 灯效效果, 故不暴露, 避免与 App 行为混淆。
+
+小艺语音（speaker_action 服务，真机实测）:
+- 设备 service_states 上报 ``communication`` 与 ``speakerIfttt``（data 均为空对象,
+  即纯命令型服务）→ 通过 ``speaker_capabilities()`` 声明 tts 与 voice_command;
+- 实测 FLMG-10（固件 HarmonyOS 6.0.0）: tts 与 voice_command 均返回成功,
+  音箱 speakerState 出现「语音播报（3）」后回到「待机中」。
 """
 from __future__ import annotations
 
@@ -48,6 +54,10 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+from ..const import (
+    SPEAKER_ACTION_TTS,
+    SPEAKER_ACTION_VOICE_COMMAND,
+)
 from .api import EntitySpec
 from .context import DeviceContext
 
@@ -156,6 +166,16 @@ class ProductX0A0Adapter:
     """X0A0 华为 AI 音箱：media_player + 开关 + 状态传感器。"""
 
     prod_id = "X0A0"
+
+    def speaker_capabilities(self, context: DeviceContext) -> frozenset[str]:
+        """Declare speaker actions backed by the device Profile."""
+
+        capabilities: set[str] = set()
+        if context.has_service("communication"):
+            capabilities.add(SPEAKER_ACTION_TTS)
+        if context.has_service("speakerIfttt"):
+            capabilities.add(SPEAKER_ACTION_VOICE_COMMAND)
+        return frozenset(capabilities)
 
     def entities(self, context: DeviceContext) -> tuple[EntitySpec, ...]:
         if context.profile is None or not context.has_service("audioplayer"):
