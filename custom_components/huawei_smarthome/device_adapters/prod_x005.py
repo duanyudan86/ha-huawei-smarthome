@@ -112,15 +112,6 @@ async def _set_volume(context: DeviceContext, data: Mapping[str, Any]) -> None:
     )
 
 
-async def _speak(context: DeviceContext, data: Mapping[str, Any]) -> None:
-    """Send the verified X005 text-to-speech service command."""
-
-    message = data.get("message")
-    if not isinstance(message, str) or not message:
-        raise ValueError("notify message must be a non-empty string")
-    await context.async_send_tts(message)
-
-
 class ProductX005Adapter:
     """X005 华为 AI 音箱 2 适配器。"""
 
@@ -224,16 +215,6 @@ class ProductX005Adapter:
                         "unit": "%",
                         "state_class": "measurement",
                     },
-                )
-            )
-        if context.has_service("communication"):
-            entities.append(
-                EntitySpec(
-                    platform="notify",
-                    key="play_text",
-                    name="播放指定文字",
-                    state=lambda _ctx: {},
-                    actions={"send_message": _speak},
                 )
             )
         return tuple(entities)
