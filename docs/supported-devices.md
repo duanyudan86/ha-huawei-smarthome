@@ -210,6 +210,7 @@
 | 107J | 遥看小苹果红外网关 | 深圳遥看（YKK） | 红外网关 |
 | 2MLE | IAM 智能净化加湿一体机 U7 | 艾恩科技集团（IAM） | 空气净化器 |
 | 2983 | 名豆之约智能插座16A | 广州万烨（wanyesw） | 智能插座 |
+| 2K8A | 霍尼韦尔空气净化器 KJ1000F-P22W | 霍尼韦尔（Honeywell/霍威授权） | 空气净化器 |
 ## 维护规则
 
 新增单品时，在 `custom_components/huawei_smarthome/device_adapters/` 增加对应的 `prod_<prodId>.py`，并同步更新本表。重复 `prodId` 不应新增第二个适配器文件。
